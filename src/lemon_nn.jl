@@ -1,4 +1,4 @@
-using FileIO, Images, MosaicViews, Plots, Random
+using BenchmarkTools, FileIO, Images, MosaicViews, Plots, Random
 
 function load_images(goodQualityPath, badQualityPath, emptyBackgroundPath)
     # Load Good Quality
@@ -80,13 +80,196 @@ function clean_data(goodQuality, badQuality, emptyBackground)
 end
 
 function split_data(D, T, percent)
-    println("Splitting Data")
-
     n = size(D, 1)
     idx = shuffle(1:n)
     train_idx = view(idx, 1:floor(Int, percent * n))
     test_idx = view(idx, (floor(Int, percent * n) + 1):n)
     return D[train_idx,:], D[test_idx,:], T[train_idx,:], T[test_idx,:]
+end
+
+function train(Data, Target, numClasses)
+    # Number of Training Samples
+    N = length(Target)
+
+    # Dimesion of Input
+    D = length(Data[1])
+
+    # Setting Up Training and Validation Set
+    # println("Splitting Train -> Train & Validation")
+    println("Splitting -> Train & Validation")
+    valNum = round(Int64, N / 3)
+    trainNum = N - valNum
+
+    DTrain, DVal, TTrain, TVal = split_data(Data, Target, trainNum / N)
+
+    # Number of Hidden Nodes
+    hiddenNodes = 10
+
+    # Batch Size
+    batchSize = floor(Int, trainNum / 10)
+
+    # Initial Adam (Hyperparameters) Parameters
+    mOne = zeros(hiddenNodes, D)
+    mTwo = zeros(numClasses, hiddenNodes + 1) # To account for bias node
+
+    vOne = zeros(hiddenNodes, D)
+    vTwo = zeros(numClasses, hiddenNodes + 1) # To account for bias node
+
+    alpha = 1 / 1000 # Step
+    betaOne = 0.9 # Decay rate 1
+    betaTwo = 0.999 # Decay rate 2
+    epsilon = 1e-8 # Numerical stability param
+
+    # Setting Up Network Layers
+    inputLayer = zeros(D)
+    hiddenLayer = zeros(hiddenNodes)
+    outputLayer = zeros(3)
+
+    layerOneWeight = 5 * randn(hiddenNodes, D)
+    layerTwoWeight = 5 * randn(numClasses, hiddenNodes + 1) # To account for bias nodes
+
+    # Pre-network information
+    println("Hidden Nodes: ", hiddenNodes)
+    println("Batch Size: ", batchSize)
+    println("Total Weights: ", prod(size(layerOneWeight)) + prod(size(layerTwoWeight)))
+    println("Initial Training Error: ", test(DTrain, TTrain, layerOneWeight, layerTwoWeight, 3))
+    println("Initial Validation Error: ", test(DVal, TVal, layerOneWeight, layerTwoWeight, 3))
+
+    # Network Information
+    epoch = 1
+    stop = false
+    while !stop
+        # Copys of Weights to Calculate Norm Update
+        layerOnePreviousWeight = copy(layerOneWeight)
+        layerTwoPreviousWeight = copy(layerTwoWeight)
+
+        iteration = 1
+        gradientOne = zeros(hiddenNodes, D)
+        gradientTwo = zeros(numClasses, hiddenNodes + 1) # To account for bias node
+
+        trainIndex = shuffle(1:trainNum)
+
+        offset = -1
+        for b = 1:(floor(Int, trainNum / batchSize) - 1)
+            offset += batchSize
+            for n = 1:batchSize
+                x = DTrain[trainIndex[offset + n]]
+                t = TTrain[trainIndex[offset + n]]
+
+                inputLayer = x
+                # Forward Propogation
+                y = zeros(hiddenNodes + 1) # To account for bias nodes
+                y[1] = 1 # Bias Node
+                for j = 1:hiddenNodes
+                    hiddenLayer[j] = 0
+                    for k = 1:D
+                        hiddenLayer[j] += layerOneWeight[j, k] * inputLayer[k].r
+                    end
+                    y[j + 1] = linearActivation(hiddenLayer[j])
+                end
+
+                outputLayer = zeros(3)
+                z = zeros(3)
+                for c = 1:numClasses
+                    for j = 1:hiddenNodes + 1 # To account for bias nodes
+                        outputLayer[c] += layerTwoWeight[c, j] * y[j]
+                    end
+                    z[c] = softMax(outputLayer, outputLayer[c], numClasses)
+                end
+            end
+        end
+
+        norm = 0
+        for c = 1:numClasses
+            for j = 1:hiddenNodes + 1 # To account for bias nodes
+                dw = layerTwoPreviousWeight[c, j] - layerTwoWeight[c, j]
+                norm += dw^2
+            end
+        end
+        for i = 1:D
+            for j = 1:hiddenNodes
+                dw = layerOnePreviousWeight[j, i] - layerOneWeight[j, i]
+                norm += dw^2
+            end
+        end
+
+        if epoch % 100 == 0
+            println("Epoch ", epoch, " norm is ", norm)
+        end
+
+        stop = norm < 1e-6
+    end
+
+    # Post-network Information
+    println("Final Training Error: ", test(DTrain, TTrain, layerOneWeight, layerTwoWeight, 3))
+    println("Final Validation Error: ", test(DVal, TVal, layerOneWeight, layerTwoWeight, 3))
+end
+
+function test(Data, Target, layerOneWeight, layerTwoWeight, numClasses)
+    # Number of Training Samples
+    N = length(Target)
+
+    # Dimesion of Input
+    D = length(Data[1])
+
+    # Number of Hidden Nodes
+    hiddenNodes = size(layerOneWeight)[1]
+
+    # Calculate Error
+    error = 0
+    for n = 1:N
+        x = Data[n]
+        t = Target[n]
+
+        # Forward Propogation
+        y = zeros(hiddenNodes + 1) # To account for bias nodes
+        y[1] = 1 # Bias Node
+        for j = 1:hiddenNodes
+            a = 0
+            for k = 1:D
+                a += layerOneWeight[j, k] * x[k].r
+            end
+            y[j + 1] = sigmoidActivation(a)
+        end
+
+        a = zeros(3)
+        z = zeros(3)
+        for c = 1:numClasses
+            for j = 1:hiddenNodes + 1 # To account for bias nodes
+                a[c] += layerTwoWeight[c, j] * y[j]
+            end
+            z[c] = softMax(a, a[c], numClasses)
+            if t == c
+                error += 1 * log(z[c])
+            end
+        end
+    end
+
+    return -error
+end
+
+function linearActivation(a)
+    return a
+end
+
+function linearActivationDerivative(a)
+    return 1
+end
+
+function sigmoidActivation(a)
+    return -1 + 2 / (1 + exp(-a))
+end
+
+function sigmoidActivationDerivative(a)
+    return 2 * exp(-a) / ((1 + exp(-a))^2)
+end
+
+function softMax(a, x, numClasses)
+    aq = 0
+    for c = 1:numClasses
+        aq += exp(sigmoidActivationDerivative(a[c]))
+    end
+    return exp(sigmoidActivationDerivative(x)) / aq
 end
 
 function main()
@@ -103,20 +286,21 @@ function main()
     goodQuality, badQuality, emptyBackground = load_images(goodQualityPath, badQualityPath, emptyBackgroundPath)
 
     # Display Samples of Data
-    mosaicview([goodQuality[1:3]; badQuality[1:3]; emptyBackground[1:3]], fillvalue=0.5, npad=2, nrow=3, rowmajor=true)
+    # mosaicview([goodQuality[1:3]; badQuality[1:3]; emptyBackground[1:3]], fillvalue=0.5, npad=2, nrow=3, rowmajor=true)
 
     # Cleaning Data
     D, T = clean_data(goodQuality, badQuality, emptyBackground)
 
     # Splitting Data
-    DTrain, DTest, TTrain, TTest = split_data(D, T, 0.66)
+    # println("Splitting Data -> Train & Test")
+    # DTrain, DTest, TTrain, TTest = split_data(D, T, 0.66)
 
-    println(size(DTrain))
-    println(size(DTest))
-    println(size(TTrain))
-    println(size(TTest))
+    # Display Cleaned Samples of Data
+    # mosaicview(DTrain[1:81], fillvalue=0.5, npad=2, nrow=9, rowmajor=true)
 
-    mosaicview(DTrain[1:81], fillvalue=0.5, npad=2, nrow=9, rowmajor=true)
+    # train(DTrain, TTrain)
+    train(D, T, 3)
 end
 
+# @btime main()
 main()
