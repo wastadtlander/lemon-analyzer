@@ -103,7 +103,7 @@ function train(Data, Target, numClasses)
     DTrain, DVal, TTrain, TVal = split_data(Data, Target, trainNum / N)
 
     # Number of Hidden Nodes
-    hiddenNodes = 10
+    hiddenNodes = 2
 
     # Batch Size
     batchSize = floor(Int, trainNum / 10)
@@ -165,16 +165,77 @@ function train(Data, Target, numClasses)
                     for k = 1:D
                         hiddenLayer[j] += layerOneWeight[j, k] * inputLayer[k].r
                     end
-                    y[j + 1] = linearActivation(hiddenLayer[j])
+                    y[j + 1] = sigmoidActivation(hiddenLayer[j])
                 end
 
                 outputLayer = zeros(3)
-                z = zeros(3)
                 for c = 1:numClasses
                     for j = 1:hiddenNodes + 1 # To account for bias nodes
                         outputLayer[c] += layerTwoWeight[c, j] * y[j]
                     end
-                    z[c] = softMax(outputLayer, outputLayer[c], numClasses)
+                end
+
+                z = zeros(3)
+                for c = 1:numClasses
+                    z[c] = linearActivation(outputLayer[c])
+                end
+
+                modifiedT = zeros(3)
+                if t == 1
+                    modifiedT[1] = 1
+                elseif t == 2
+                    modifiedT[2] = 1
+                else
+                    modifiedT[3] = 1
+                end
+
+                delta = z - modifiedT
+
+                # Gradients
+                for c = 1:numClasses
+                    for j = 1:hiddenNodes + 1
+                        if j == 1
+                            gradientTwo[c, j] += delta[c] * y[j]
+                        else
+                            gradientTwo[c, j] += delta[c] * y[j] * linearActivationDerivative(outputLayer[c])
+                        end
+                    end
+                end
+
+                for c = 1:numClasses
+                    for i = 1:D
+                        for j = 1:hiddenNodes
+                            gradientOne[j, i] += delta[c] * layerTwoWeight[c, j + 1] * sigmoidActivationDerivative(hiddenLayer[j]) * inputLayer[i].r
+                        end
+                    end
+                end
+
+                # ADAM
+                mOne = betaOne .* mOne + (1 - betaOne) .* gradientOne
+                mTwo = betaOne .* mTwo + (1 - betaOne) .* gradientTwo
+
+                vOne = betaTwo .* vOne + (1 - betaTwo) .* (gradientOne .^ 2)
+                vTwo = betaTwo .* vTwo + (1 - betaTwo) .* (gradientTwo .^ 2)
+
+                mOneHat = mOne ./ (1 - betaOne ^ iteration)
+                mTwoHat = mTwo ./ (1 - betaOne ^ iteration)
+
+                vOneHat = vOne ./ (1 - (betaTwo ^ iteration))
+                vTwoHat = vTwo ./ (1 - (betaTwo ^ iteration))
+
+                iteration += 1
+
+                # Weights
+                for c = 1:numClasses
+                    for j = 1:hiddenNodes + 1
+                        layerTwoWeight[c, j] -= alpha * mTwoHat[c, j] / (sqrt(vTwoHat[c, j]) + epsilon)
+                    end
+                end
+
+                for i = 1:D
+                    for j = 1:hiddenNodes
+                        layerOneWeight[j, i] -= alpha * mOneHat[j, i] / (sqrt(vOneHat[j, i]) + epsilon)
+                    end
                 end
             end
         end
@@ -193,9 +254,10 @@ function train(Data, Target, numClasses)
             end
         end
 
-        if epoch % 100 == 0
-            println("Epoch ", epoch, " norm is ", norm)
-        end
+        println("Epoch ", epoch, " Training Error Is ", test(DTrain, TTrain, layerOneWeight, layerTwoWeight, 3))
+        println("Norm is ", norm)
+
+        epoch += 1
 
         stop = norm < 1e-6
     end
@@ -257,11 +319,11 @@ function linearActivationDerivative(a)
 end
 
 function sigmoidActivation(a)
-    return -1 + 2 / (1 + exp(-a))
+    return 1 / (1 + exp(-a))
 end
 
 function sigmoidActivationDerivative(a)
-    return 2 * exp(-a) / ((1 + exp(-a))^2)
+    return sigmoidActivation(a) * (1 - sigmoidActivation(a))
 end
 
 function softMax(a, x, numClasses)
@@ -278,9 +340,9 @@ function main()
     cd("./Documents/ML Project/")
 
     # Paths of Data
-    goodQualityPath = "./lemon_dataset/good_quality/"
-    badQualityPath = "./lemon_dataset/bad_quality"
-    emptyBackgroundPath = "./lemon_dataset/empty_background"
+    goodQualityPath = "./lemon_dataset_scaled/good_quality/"
+    badQualityPath = "./lemon_dataset_scaled/bad_quality"
+    emptyBackgroundPath = "./lemon_dataset_scaled/empty_background"
 
     # Load Data as Vector{Matrix{RGB{N0f8}}}
     goodQuality, badQuality, emptyBackground = load_images(goodQualityPath, badQualityPath, emptyBackgroundPath)
